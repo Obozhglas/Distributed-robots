@@ -15,6 +15,10 @@ class Task:
         self.y = y
         self.target_id = target_id
 
+        self.history = []     # история переназначений
+        self.trail = []       # след движения
+        self.color = "blue"   # цвет задачи
+
 
 class GUI:
     def __init__(self, robots, env):
@@ -86,16 +90,23 @@ class GUI:
         ).id
 
     def rebalance_tasks(self):
-        alive = [r for r in self.robots if r.status != "FAILED"]
+    alive = [r for r in self.robots if r.status != "FAILED"]
 
-        if not alive:
-            return
+    if not alive:
+        return
 
-        for t in self.tasks:
-            if any(r.id == t.target_id and r.status != "FAILED" for r in self.robots):
-                continue
+    for t in self.tasks:
+        target_robot = next((r for r in self.robots if r.id == t.target_id), None)
 
-            t.target_id = min(alive, key=lambda r: r.load).id
+        if target_robot and target_robot.status != "FAILED":
+            continue
+
+        new_target = min(alive, key=lambda r: r.load).id
+
+        if new_target != t.target_id:
+            t.history.append(t.target_id)
+            t.target_id = new_target
+            t.color = "purple"  
 
     # --------------------------
     # ЗАДАЧИ
@@ -126,7 +137,11 @@ class GUI:
             )
 
             if target_robot is None or target_robot.status == "FAILED":
-                t.target_id = self.choose_robot()
+                new_target = self.choose_robot()
+                if new_target:
+                    t.history.append(t.target_id)
+                    t.target_id = new_target
+                    t.color = "purple"
                 continue
 
             tx, ty = self.robot_pos[t.target_id]
@@ -140,8 +155,9 @@ class GUI:
                 target_robot.assign_task("task")
                 continue
 
-            t.x += dx / dist * speed
-            t.y += dy / dist * speed
+            t.trail.append((t.x, t.y))
+            if len(t.trail) > 10:
+                t.trail.pop(0)
 
     # --------------------------
     # РЕНДЕР
@@ -161,18 +177,49 @@ class GUI:
             self.canvas.create_text(x, y+50, text=f"load:{r.load}")
 
     def draw_tasks(self):
-        for t in self.tasks:
-            self.canvas.create_oval(
-                t.x-5, t.y-5,
-                t.x+5, t.y+5,
-                fill="blue"
+    for t in self.tasks:
+        tx, ty = self.robot_pos[t.target_id]
+
+        # линия направления
+        self.canvas.create_line(
+            t.x, t.y,
+            tx, ty,
+            dash=(2, 2),
+            fill="gray"
+        )
+
+        # след движения
+        for i in range(len(t.trail) - 1):
+            x1, y1 = t.trail[i]
+            x2, y2 = t.trail[i + 1]
+
+            self.canvas.create_line(
+                x1, y1, x2, y2,
+                fill="lightblue"
             )
+
+        # сама задача
+        self.canvas.create_oval(
+            t.x-5, t.y-5,
+            t.x+5, t.y+5,
+            fill=t.color
+        )
 
     # --------------------------
     # ЦИКЛ
     # --------------------------
     def update(self):
         self.canvas.delete("all")
+
+        # входной поток
+        for i in range(10):
+            self.canvas.create_oval(
+                100 + i*80, 20,
+                110 + i*80, 30,
+                fill="lightgray"
+            )
+
+        self.canvas.create_text(500, 10, text="Incoming Flow")
 
         update_heartbeats(self.robots)
         detect_failures(self.robots)
