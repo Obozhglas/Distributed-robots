@@ -2,7 +2,6 @@ import tkinter as tk
 import random
 import math
 from robot.heartbeat import update_heartbeats, detect_failures
-from robot.agent import run_auction
 
 
 # --------------------------
@@ -15,14 +14,21 @@ class Task:
         self.y = y
         self.target_id = target_id
 
+        self.history = []
+        self.trail = []
+        self.color = "blue"
 
+
+# --------------------------
+# GUI
+# --------------------------
 class GUI:
     def __init__(self, robots, env):
         self.robots = robots
         self.env = env
 
         self.root = tk.Tk()
-        self.root.title("Distributed Robot System - Balanced Flow")
+        self.root.title("Distributed Robot System - Parallel Execution")
 
         self.canvas = tk.Canvas(self.root, width=1000, height=600, bg="white")
         self.canvas.pack()
@@ -31,11 +37,15 @@ class GUI:
         self.tasks = []
         self.task_id = 0
 
+        # init load tracking
+        for r in self.robots:
+            r.load = 0
+
         self.init_layout()
         self.create_controls()
 
     # --------------------------
-    # РУЧНОЕ УПРАВЛЕНИЕ
+    # CONTROLS
     # --------------------------
     def create_controls(self):
         frame = tk.Frame(self.root)
@@ -62,7 +72,7 @@ class GUI:
                     r.load = 0
 
     # --------------------------
-    # ЛОКАЦИЯ
+    # LAYOUT
     # --------------------------
     def init_layout(self):
         spacing = 250
@@ -72,61 +82,45 @@ class GUI:
             self.robot_pos[r.id] = (x, y)
 
     # --------------------------
-    # БАЛАНСИРОВКА РОБОТОВ
+    # PARALLEL TASK ASSIGNMENT (KEY FIX)
     # --------------------------
-    def choose_robot(self):
-        candidates = [r for r in self.robots if r.status != "FAILED"]
-
-        if not candidates:
-            return None
-
-        return min(
-            candidates,
-            key=lambda r: (r.load, random.random())
-        ).id
-
-    def rebalance_tasks(self):
+    def assign_task_to_robot(self, task):
         alive = [r for r in self.robots if r.status != "FAILED"]
 
         if not alive:
             return
 
-        for t in self.tasks:
-            if any(r.id == t.target_id and r.status != "FAILED" for r in self.robots):
-                continue
+        robot = min(alive, key=lambda r: r.load)
 
-            t.target_id = min(alive, key=lambda r: r.load).id
+        task.target_id = robot.id
+        robot.load += 1
 
     # --------------------------
-    # ЗАДАЧИ
+    # TASK CREATION
     # --------------------------
     def spawn_task(self):
-        winner = self.choose_robot()
-        if winner is None:
-            return
+        t = Task(self.task_id, 500, 50, None)
 
-        self.tasks.append(Task(
-            self.task_id,
-            500,
-            50,
-            winner
-        ))
+        self.assign_task_to_robot(t)
 
+        self.tasks.append(t)
         self.task_id += 1
 
+    # --------------------------
+    # TASK UPDATE
+    # --------------------------
     def update_tasks(self):
-        self.rebalance_tasks()
-
         speed = 4
 
         for t in self.tasks[:]:
-            target_robot = next(
-                (r for r in self.robots if r.id == t.target_id),
-                None
-            )
+            target_robot = next((r for r in self.robots if r.id == t.target_id), None)
 
             if target_robot is None or target_robot.status == "FAILED":
-                t.target_id = self.choose_robot()
+                self.assign_task_to_robot(t)
+                t.color = "purple"
+                continue
+
+            if t.target_id not in self.robot_pos:
                 continue
 
             tx, ty = self.robot_pos[t.target_id]
@@ -136,15 +130,22 @@ class GUI:
             dist = math.sqrt(dx * dx + dy * dy)
 
             if dist < 10:
-                self.tasks.remove(t)
-                target_robot.assign_task("task")
+                if t in self.tasks:
+                    self.tasks.remove(t)
+
+                target_robot.load = max(0, target_robot.load - 1)
                 continue
 
-            t.x += dx / dist * speed
-            t.y += dy / dist * speed
+            if dist != 0:
+                t.x += (dx / dist) * speed
+                t.y += (dy / dist) * speed
+
+            t.trail.append((t.x, t.y))
+            if len(t.trail) > 10:
+                t.trail.pop(0)
 
     # --------------------------
-    # РЕНДЕР
+    # DRAW ROBOTS
     # --------------------------
     def draw_robots(self):
         for r in self.robots:
@@ -160,25 +161,58 @@ class GUI:
             self.canvas.create_text(x, y, text=r.id)
             self.canvas.create_text(x, y+50, text=f"load:{r.load}")
 
+    # --------------------------
+    # DRAW TASKS
+    # --------------------------
     def draw_tasks(self):
         for t in self.tasks:
+            if t.target_id not in self.robot_pos:
+                continue
+
+            tx, ty = self.robot_pos[t.target_id]
+
+            self.canvas.create_line(
+                t.x, t.y,
+                tx, ty,
+                dash=(2, 2),
+                fill="gray"
+            )
+
+            for i in range(len(t.trail) - 1):
+                x1, y1 = t.trail[i]
+                x2, y2 = t.trail[i + 1]
+
+                self.canvas.create_line(x1, y1, x2, y2, fill="lightblue")
+
             self.canvas.create_oval(
                 t.x-5, t.y-5,
                 t.x+5, t.y+5,
-                fill="blue"
+                fill=t.color
             )
 
     # --------------------------
-    # ЦИКЛ
+    # MAIN LOOP
     # --------------------------
     def update(self):
         self.canvas.delete("all")
 
+        # heartbeat system
         update_heartbeats(self.robots)
         detect_failures(self.robots)
 
+        # parallel task generation
         if random.random() < 0.25:
             self.spawn_task()
+
+        # background flow
+        for i in range(10):
+            self.canvas.create_oval(
+                100 + i*80, 20,
+                110 + i*80, 30,
+                fill="lightgray"
+            )
+
+        self.canvas.create_text(500, 10, text="Incoming Flow")
 
         self.draw_robots()
         self.update_tasks()
